@@ -193,3 +193,86 @@ def test_http_client_sets_user_agent(monkeypatch):
 
     assert response.status == 200
     assert captured["user_agent"] == "SEOMonster/test"
+
+def test_transport_error_redacts_credentials_in_url(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_HTTP_TOKEN"
+    url = f"https://example.com/page?token={secret}"
+    client = HttpClient()
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"connection failed for {url}")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_request_raw(
+            "GET",
+            url,
+            max_bytes=1024,
+            extra_headers=None,
+        )
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_redirect_loop_error_redacts_credentials(monkeypatch):
+    secret = "SUPER_SECRET_REDIRECT_TOKEN"
+    url = f"https://example.com/page?token={secret}"
+    client = HttpClient()
+
+    def fake_request(method, current, *, max_bytes, extra_headers):
+        return 302, {"location": url}, b""
+
+    monkeypatch.setattr(client, "_http_request_raw", fake_request)
+
+    with pytest.raises(ApiError) as exc_info:
+        client.fetch(url)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_max_redirects_error_redacts_credentials(monkeypatch):
+    secret = "SUPER_SECRET_MAX_REDIRECT_TOKEN"
+    url = f"https://example.com/start?token={secret}"
+    client = HttpClient()
+
+    def fake_request(method, current, *, max_bytes, extra_headers):
+        return 302, {"location": "/next"}, b""
+
+    monkeypatch.setattr(client, "_http_request_raw", fake_request)
+
+    with pytest.raises(ApiError) as exc_info:
+        client.fetch(url, max_redirects=0)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_timeout_error_redacts_credentials_in_url(monkeypatch):
+    import urllib.request
+
+    secret = "SUPER_SECRET_TIMEOUT_TOKEN"
+    url = f"https://example.com/page?token={secret}"
+    client = HttpClient()
+
+    def boom(*args, **kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_request_raw(
+            "GET",
+            url,
+            max_bytes=1024,
+            extra_headers=None,
+        )
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

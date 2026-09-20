@@ -37,3 +37,26 @@ def test_probe():
 def test_builder_requires_key(make_config):
     assert build_openpagerank_client(make_config()) is None
     assert isinstance(build_openpagerank_client(make_config(OPENPAGERANK_API_KEY="k")), OpenPageRankClient)
+
+def test_transport_error_does_not_expose_api_key(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    import pytest
+
+    from seo_mcp.clients.errors import ApiError
+
+    secret = "SUPER_SECRET_OPENPAGERANK_KEY"
+    client = OpenPageRankClient(secret)
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"transport failure for key={secret}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._raw_request(["example.com"])
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

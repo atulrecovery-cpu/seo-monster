@@ -101,3 +101,37 @@ def test_builder_requires_both_credentials(make_config):
     cfg = make_config(DATAFORSEO_LOGIN="u", DATAFORSEO_PASSWORD="p")
     assert isinstance(build_dataforseo_client(cfg), DataForSEOClient)
     assert build_dataforseo_client(make_config(DATAFORSEO_LOGIN="u")) is None  # password missing
+
+def test_transport_error_does_not_expose_basic_auth(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    client = DataForSEOClient("secret_login", "secret_password")
+    secret = client._auth
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"transport failure Authorization: Basic {secret}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._raw_request("GET", "/v3/appendix/user_data")
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_unwrap_error_does_not_expose_credentials():
+    secret = "SUPER_SECRET_DATAFORSEO_PASSWORD"
+    client = DataForSEOClient("login", secret)
+    payload = {
+        "status_code": 40000,
+        "status_message": f"authentication failed password={secret}",
+    }
+
+    with pytest.raises(ApiError) as exc_info:
+        client._unwrap(payload)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

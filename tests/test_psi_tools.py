@@ -297,3 +297,22 @@ def test_opportunities_maps_upstream_error(make_config):
     result = psi_tools.psi_opportunities({"url": "https://x.com"}, make_config(), {"psi": client})
     assert result["ok"] is False
     assert result["error"]["code"] == "RATE_LIMITED"
+
+def test_psi_transport_error_does_not_expose_api_key(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_PSI_KEY"
+    client = PsiClient(api_key=secret)
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"transport failure for api_key={secret}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_get("https://www.googleapis.com/pagespeedonline/v5/runPagespeed")
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

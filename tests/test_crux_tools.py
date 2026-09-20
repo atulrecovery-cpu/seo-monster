@@ -260,3 +260,28 @@ def test_query_current_requires_url_or_origin():
     with pytest.raises(ApiError) as ei:
         client.query_current()
     assert ei.value.code == ErrorCode.INVALID_INPUT
+
+def test_crux_transport_error_does_not_expose_api_key(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_CRUX_KEY"
+    client = CruxHistoryClient(api_key=secret)
+
+    def boom(request, *args, **kwargs):
+        raise urllib.error.URLError(
+            f"connection failed for {request.full_url}"
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._post(
+            "https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord",
+            {"origin": "https://example.com"},
+            service="CrUX",
+        )
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

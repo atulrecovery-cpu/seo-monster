@@ -16,7 +16,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError, map_http_status
+from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 API_BASE = "https://openpagerank.com/api/v1.0/getPageRank"
 _TIMEOUT_SECONDS = 20
@@ -38,7 +38,13 @@ class OpenPageRankClient:
             body_text = exc.read().decode("utf-8", errors="replace")
             raise map_http_status(exc.code, body_text, service="OpenPageRank") from exc
         except urllib.error.URLError as exc:
-            raise ApiError(ErrorCode.UPSTREAM_ERROR, f"OpenPageRank request failed: {exc.reason}") from exc
+            reason = _redact_sensitive_text(str(exc.reason))
+            if self._key:
+                reason = reason.replace(self._key, "[REDACTED]")
+            raise ApiError(
+                ErrorCode.UPSTREAM_ERROR,
+                f"OpenPageRank request failed: {reason}",
+            ) from exc
 
     def domain_rank(self, domains: list[str]) -> dict[str, float]:
         """Return ``{domain: page_rank_decimal}`` for the (deduped) domains."""

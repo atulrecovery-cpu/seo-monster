@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError, map_http_status
+from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 API_BASE = "https://api.dataforseo.com"
 _TIMEOUT_SECONDS = 30
@@ -51,13 +51,17 @@ class DataForSEOClient:
             body_text = exc.read().decode("utf-8", errors="replace")
             raise map_http_status(exc.code, body_text, service="DataForSEO") from exc
         except urllib.error.URLError as exc:
-            raise ApiError(ErrorCode.UPSTREAM_ERROR, f"DataForSEO request failed: {exc.reason}") from exc
+            reason = _redact_sensitive_text(str(exc.reason))
+            raise ApiError(
+                ErrorCode.UPSTREAM_ERROR,
+                f"DataForSEO request failed: {reason}",
+            ) from exc
 
     def _unwrap(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if payload.get("status_code") != _SUCCESS:
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"DataForSEO: {payload.get('status_message', 'error')} ({payload.get('status_code')}).",
+                f"DataForSEO: {_redact_sensitive_text(str(payload.get('status_message', 'error')))} ({payload.get('status_code')}).",
                 details={"status_code": payload.get("status_code")},
             )
         tasks = payload.get("tasks") or []
@@ -67,7 +71,7 @@ class DataForSEOClient:
         if t0.get("status_code") != _SUCCESS:
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"DataForSEO task: {t0.get('status_message', 'error')} ({t0.get('status_code')}).",
+                f"DataForSEO task: {_redact_sensitive_text(str(t0.get('status_message', 'error')))} ({t0.get('status_code')}).",
                 details={"status_code": t0.get("status_code")},
             )
         return t0.get("result") or []

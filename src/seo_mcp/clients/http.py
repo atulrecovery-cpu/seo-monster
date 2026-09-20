@@ -33,7 +33,7 @@ from typing import Any
 
 from .. import __version__
 from ..errors import ErrorCode
-from .errors import ApiError
+from .errors import ApiError, _redact_sensitive_text
 
 
 # Derived from the package version rather than hardcoded: this string drifted
@@ -128,8 +128,13 @@ class HttpClient:
             if current in seen:
                 raise ApiError(
                     ErrorCode.UPSTREAM_ERROR,
-                    f"Redirect loop detected at {current!r}.",
-                    details={"chain": [hop.url for hop in chain]},
+                    f"Redirect loop detected at {_redact_sensitive_text(current)!r}.",
+                    details={
+                        "chain": [
+                            _redact_sensitive_text(hop.url)
+                            for hop in chain
+                        ]
+                    },
                 )
             seen.add(current)
             t0 = time.monotonic()
@@ -153,8 +158,13 @@ class HttpClient:
             )
         raise ApiError(
             ErrorCode.UPSTREAM_ERROR,
-            f"Exceeded max_redirects={max_redirects} starting at {url!r}.",
-            details={"chain": [hop.url for hop in chain]},
+            f"Exceeded max_redirects={max_redirects} starting at {_redact_sensitive_text(url)!r}.",
+            details={
+                "chain": [
+                    _redact_sensitive_text(hop.url)
+                    for hop in chain
+                ]
+            },
         )
 
     def _http_request_raw(
@@ -196,14 +206,17 @@ class HttpClient:
                 return self._read_response(exc, max_bytes)
             return self._read_response(exc, max_bytes)
         except urllib.error.URLError as exc:
+            safe_url = _redact_sensitive_text(url)
+            reason = _redact_sensitive_text(str(exc.reason))
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"HTTP request to {url!r} failed: {exc.reason}",
+                f"HTTP request to {safe_url!r} failed: {reason}",
             ) from exc
         except TimeoutError as exc:
+            safe_url = _redact_sensitive_text(url)
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"HTTP request to {url!r} timed out after {self._timeout}s.",
+                f"HTTP request to {safe_url!r} timed out after {self._timeout}s.",
             ) from exc
 
     @staticmethod

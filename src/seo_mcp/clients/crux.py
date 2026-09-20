@@ -31,7 +31,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError, map_http_status
+from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 
 _ENDPOINT = "https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord"
@@ -117,7 +117,13 @@ class CruxHistoryClient:
                 return {"record": None, "no_data": True}
             raise map_http_status(exc.code, body_text, service=service) from exc
         except urllib.error.URLError as exc:
-            raise ApiError(ErrorCode.UPSTREAM_ERROR, f"{service} request failed: {exc.reason}") from exc
+            reason = _redact_sensitive_text(str(exc.reason))
+            if self._key:
+                reason = reason.replace(self._key, "[REDACTED]")
+            raise ApiError(
+                ErrorCode.UPSTREAM_ERROR,
+                f"{service} request failed: {reason}",
+            ) from exc
 
     @staticmethod
     def _is_no_data(status: int, body: str) -> bool:
