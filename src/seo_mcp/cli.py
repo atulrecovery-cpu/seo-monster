@@ -113,7 +113,7 @@ def validate_cloudflare(token: str) -> tuple[str, str]:
     status is 'ok' | 'rejected' | 'unreachable'. Module-level so tests can
     monkeypatch it without touching the network."""
     from .clients.cloudflare import CfClient
-    from .clients.errors import ApiError
+    from .clients.errors import ApiError, _redact_sensitive_text
     from .errors import ErrorCode
 
     try:
@@ -132,7 +132,7 @@ def validate_cloudflare(token: str) -> tuple[str, str]:
         }
         return ("rejected" if exc.code in rejected else "unreachable"), exc.message
     except Exception as exc:  # network boundary
-        return "unreachable", str(exc)
+        return "unreachable", _redact_sensitive_text(str(exc))
 
 
 def validate_indexnow(key: str, key_location: str | None) -> tuple[str, str]:

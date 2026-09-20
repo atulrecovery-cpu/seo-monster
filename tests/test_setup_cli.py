@@ -290,3 +290,19 @@ def test_write_config_toml_rejects_existing_symlink(tmp_path):
         )
 
     assert victim.read_text() == "DO NOT OVERWRITE"
+
+def test_validate_cloudflare_generic_exception_redacts_api_key(monkeypatch):
+    from seo_mcp.clients.cloudflare import CfClient
+
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+
+    def boom(self):
+        raise RuntimeError(f"network failure for key={secret}")
+
+    monkeypatch.setattr(CfClient, "list_zones", boom)
+
+    status, message = cli.validate_cloudflare("cfat_real")
+
+    assert status == "unreachable"
+    assert secret not in message
+    assert "[REDACTED]" in message
