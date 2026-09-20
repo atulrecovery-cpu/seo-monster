@@ -83,9 +83,18 @@ def _granted_scopes(token_path: str) -> set[str]:
     """
     try:
         path = Path(token_path)
-        if path.stat().st_size > 1024 * 1024:
+
+        if os.name != "nt" and hasattr(os, "O_NOFOLLOW"):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "r") as handle:
+                content = handle.read((1024 * 1024) + 1)
+        else:
+            content = path.read_text()
+
+        if len(content) > 1024 * 1024:
             return set()
-        raw = json.loads(path.read_text()).get("scopes")
+
+        raw = json.loads(content).get("scopes")
     except (OSError, ValueError, AttributeError):
         return set()
     if isinstance(raw, str):

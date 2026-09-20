@@ -177,6 +177,19 @@ def test_scope_guard_runs_before_credential_construction(make_config, tmp_path):
     with pytest.raises(MissingGoogleAuth, match="seo-monster auth"):
         build_google_credentials(cfg, ["https://www.googleapis.com/auth/webmasters"])
 @pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
+def test_granted_scopes_rejects_symlinked_token_file(tmp_path):
+    from seo_mcp.clients.google_auth import _granted_scopes
+
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"scopes": ["scope-a"]}')
+
+    token = tmp_path / "token.json"
+    token.symlink_to(victim)
+
+    assert _granted_scopes(str(token)) == set()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
 def test_write_token_rejects_symlinked_parent_directory(tmp_path):
     real_dir = tmp_path / "real_tokens"
     real_dir.mkdir()
