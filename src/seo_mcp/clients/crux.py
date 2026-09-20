@@ -31,6 +31,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
+from ._response import read_json_response, read_limited_text
 from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 
@@ -110,9 +111,9 @@ class CruxHistoryClient:
         request.add_header("Content-Type", "application/json; charset=utf-8")
         try:
             with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as resp:
-                return json.loads(resp.read())
+                return read_json_response(resp, service=service)
         except urllib.error.HTTPError as exc:
-            body_text = exc.read().decode("utf-8", errors="replace")
+            body_text = read_limited_text(exc, service=service)
             if self._is_no_data(exc.code, body_text):
                 return {"record": None, "no_data": True}
             raise map_http_status(exc.code, body_text, service=service) from exc

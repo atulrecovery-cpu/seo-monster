@@ -38,6 +38,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
+from ._response import read_json_response, read_limited_text
 from .errors import ApiError, _redact_sensitive_text
 
 
@@ -118,7 +119,7 @@ class IndexNowClient:
                 # (though urlopen would raise HTTPError for >=400 anyway).
                 return {"accepted": True, "status": status}
         except urllib.error.HTTPError as exc:
-            body_text = exc.read().decode("utf-8", errors="replace")
+            body_text = read_limited_text(exc, service="IndexNow")
             raise self._map_error(exc.code, body_text) from exc
         except urllib.error.URLError as exc:
             reason = _redact_sensitive_text(str(exc.reason))

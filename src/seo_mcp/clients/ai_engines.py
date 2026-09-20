@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 
 from ..config import Config
 from ..errors import ErrorCode
+from ._response import read_json_response, read_limited_text
 from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 _TIMEOUT_SECONDS = 60
@@ -71,9 +72,9 @@ class AiEnginesClient:
         request.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as resp:
-                return json.loads(resp.read())
+                return read_json_response(resp, service=service)
         except urllib.error.HTTPError as exc:
-            raise map_http_status(exc.code, exc.read().decode("utf-8", errors="replace"), service=service) from exc
+            raise map_http_status(exc.code, read_limited_text(exc, service=service), service=service) from exc
         except urllib.error.URLError as exc:
             reason = _redact_sensitive_text(str(exc.reason))
             for secret in self._keys.values():
