@@ -4,6 +4,8 @@ writes and makes zero calls when off) and the confirm-token logic."""
 
 from __future__ import annotations
 
+import pytest
+
 from seo_mcp.tools import cf_tools
 
 
@@ -964,3 +966,45 @@ def test_managed_robots_bad_action_rejected(make_config):
     result = cf_tools.cf_managed_robots({"action": "nope"}, _cfg(make_config), {"cf": client})
     assert result["error"]["code"] == "INVALID_INPUT"
     assert client._calls == []
+
+def test_cloudflare_transport_error_does_not_expose_token(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    from seo_mcp.clients.cloudflare import CfClient
+    from seo_mcp.clients.errors import ApiError
+
+    secret = "SUPER_SECRET_CLOUDFLARE_TOKEN"
+    client = CfClient(token=secret)
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"transport failure for token={secret}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._raw_request("GET", "/zones")
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_cloudflare_payload_error_does_not_expose_token():
+    from seo_mcp.clients.cloudflare import CfClient
+
+    secret = "SUPER_SECRET_CLOUDFLARE_TOKEN"
+    payload = {
+        "success": False,
+        "errors": [
+            {
+                "code": 1000,
+                "message": f"upstream rejected token={secret}",
+            }
+        ],
+    }
+
+    error = CfClient._error_from_payload(payload)
+
+    rendered = f"{error} {error.details}"
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
