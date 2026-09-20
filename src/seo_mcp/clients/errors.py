@@ -204,33 +204,33 @@ def map_http_status(status: int, body: str, *, service: str) -> ApiError:
                 "few minutes for it to propagate, then retry. The key itself is "
                 "fine; the project just hasn't authorized this API yet."
             ),
-            details={"status": 403, "activation_url": match.group(0) if match else None, "body": body[:500]},
+            details={"status": 403, "activation_url": match.group(0) if match else None, "body": _redact_sensitive_text(body)[:500]},
         )
     if status in (401, 403):
         return ApiError(
             ErrorCode.AUTH_INVALID,
             f"{service} rejected the credentials (HTTP {status}).",
             remediation="Check the API key / token is correct and authorized.",
-            details={"status": status, "body": body[:500]},
+            details={"status": status, "body": _redact_sensitive_text(body)[:500]},
         )
     if status == 400 and ("api key not valid" in lowered or "api_key_invalid" in lowered):
         return ApiError(
             ErrorCode.AUTH_INVALID,
             f"{service} reports the API key is not valid.",
             remediation="Generate a valid API key and set it in the configuration.",
-            details={"status": 400, "body": body[:500]},
+            details={"status": 400, "body": _redact_sensitive_text(body)[:500]},
         )
     if status == 400:
         return ApiError(
             ErrorCode.INVALID_INPUT,
             f"{service} rejected the request as invalid (HTTP 400).",
-            details={"status": 400, "body": body[:500]},
+            details={"status": 400, "body": _redact_sensitive_text(body)[:500]},
         )
     if status == 404:
         return ApiError(
             ErrorCode.NOT_FOUND,
             f"{service} resource not found (HTTP 404).",
-            details={"status": 404, "body": body[:300]},
+            details={"status": 404, "body": _redact_sensitive_text(body)[:300]},
         )
     if status == 429:
         # Service-specific remediation. PSI's anonymous quota is shared across
@@ -248,10 +248,35 @@ def map_http_status(status: int, body: str, *, service: str) -> ApiError:
             ErrorCode.RATE_LIMITED,
             f"{service} rate limit hit (HTTP 429).",
             remediation=remediation,
-            details={"status": 429, "body": body[:300]},
+            details={"status": 429, "body": _redact_sensitive_text(body)[:300]},
         )
     return ApiError(
         ErrorCode.UPSTREAM_ERROR,
         f"{service} returned HTTP {status}.",
-        details={"status": status, "body": body[:500]},
+        details={"status": status, "body": _redact_sensitive_text(body)[:500]},
     )
+def _redact_sensitive_text(text: str) -> str:
+    """Redact credential-like values from upstream diagnostic text."""
+    patterns = (
+        # Query/body parameters such as key=..., api_key=..., token=...
+        (
+            r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)"
+            r"(\s*[=:]\s*[\"']?)([^\"'\s&,}]+)",
+            r"\1\2[REDACTED]",
+        ),
+        # Authorization-style values.
+        (
+            r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+",
+            r"\1 [REDACTED]",
+        ),
+        # Google API keys can appear without a key= prefix.
+        (
+            r"\bAIza[0-9A-Za-z_-]{20,}\b",
+            "[REDACTED]",
+        ),
+    )
+
+    redacted = text
+    for pattern, replacement in patterns:
+        redacted = re.sub(pattern, replacement, redacted)
+    return redacted
