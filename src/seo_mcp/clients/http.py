@@ -22,6 +22,8 @@ Design decisions:
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -41,6 +43,24 @@ _USER_AGENT = f"SEOMonster/{__version__} (+https://seomonster.avansaber.com)"
 _DEFAULT_TIMEOUT = 20
 _DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_REDIRECTS = 10
+
+
+def _validate_public_url(url: str) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ApiError(ErrorCode.INVALID_INPUT, "URL must use http:// or https:// and include a hostname.")
+
+    try:
+        addresses = [ipaddress.ip_address(parsed.hostname)]
+    except ValueError:
+        try:
+            results = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise ApiError(ErrorCode.UPSTREAM_ERROR, f"Could not resolve URL hostname {parsed.hostname!r}.") from exc
+        addresses = [ipaddress.ip_address(result[4][0]) for result in results]
+
+    if not addresses or any(not address.is_global for address in addresses):
+        raise ApiError(ErrorCode.INVALID_INPUT, f"URL target {parsed.hostname!r} resolves to a non-public IP address.")
 
 
 @dataclass
@@ -103,6 +123,7 @@ class HttpClient:
         chain: list[RedirectHop] = []
         current = url
         seen: set[str] = set()
+        _validate_public_url(current)
         for _ in range(max_redirects + 1):
             if current in seen:
                 raise ApiError(
@@ -120,6 +141,7 @@ class HttpClient:
                 location = headers["location"]
                 resolved = urllib.parse.urljoin(current, location)
                 chain.append(RedirectHop(url=current, status=status, location=resolved, elapsed_ms=elapsed))
+                _validate_public_url(resolved)
                 current = resolved
                 continue
             return HttpResponse(

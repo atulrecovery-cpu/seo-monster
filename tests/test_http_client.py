@@ -107,3 +107,53 @@ def test_body_text_decodes_with_declared_charset():
     c._http_request_raw = fake
     resp = c.fetch("https://example.com/")
     assert resp.body_text == "café"
+
+
+def test_fetch_rejects_loopback_ip_before_request():
+    c = HttpClient()
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("HTTP request must not run for a loopback target")
+
+    c._http_request_raw = should_not_run
+
+    with pytest.raises(ApiError) as ei:
+        c.fetch("http://127.0.0.1/admin")
+
+    assert ei.value.code == ErrorCode.INVALID_INPUT
+
+
+def test_fetch_rejects_hostname_resolving_to_private_ip(monkeypatch):
+    monkeypatch.setattr("seo_mcp.clients.http.socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("10.0.0.7", 0))])
+    c = HttpClient()
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("HTTP request must not run for a private DNS target")
+
+    c._http_request_raw = should_not_run
+
+    with pytest.raises(ApiError) as ei:
+        c.fetch("https://private.example/")
+
+    assert ei.value.code == ErrorCode.INVALID_INPUT
+
+def test_fetch_rejects_redirect_to_private_ip(monkeypatch):
+    monkeypatch.setattr(
+        "seo_mcp.clients.http.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
+
+    c = HttpClient()
+    calls = []
+
+    def fake_request(method, url, *, max_bytes, extra_headers):
+        calls.append(url)
+        return 302, {"location": "http://127.0.0.1/admin"}, b""
+
+    c._http_request_raw = fake_request
+
+    with pytest.raises(ApiError) as ei:
+        c.fetch("https://example.com/")
+
+    assert ei.value.code == ErrorCode.INVALID_INPUT
+    assert calls == ["https://example.com/"]
