@@ -195,7 +195,8 @@ def map_http_status(status: int, body: str, *, service: str) -> ApiError:
         or ("requests to this api" in lowered and "are blocked" in lowered)
         or "service blocked" in lowered
     ):
-        match = _ACTIVATION_RE.search(body)
+        safe_body = _redact_sensitive_text(body)
+        match = _ACTIVATION_RE.search(safe_body)
         return ApiError(
             ErrorCode.SERVICE_DISABLED,
             f"{service} is not enabled for the API key's Google Cloud project.",
@@ -204,7 +205,7 @@ def map_http_status(status: int, body: str, *, service: str) -> ApiError:
                 "few minutes for it to propagate, then retry. The key itself is "
                 "fine; the project just hasn't authorized this API yet."
             ),
-            details={"status": 403, "activation_url": match.group(0) if match else None, "body": _redact_sensitive_text(body)[:500]},
+            details={"status": 403, "activation_url": match.group(0) if match else None, "body": safe_body[:500]},
         )
     if status in (401, 403):
         return ApiError(

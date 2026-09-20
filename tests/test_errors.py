@@ -104,3 +104,15 @@ def test_map_google_exception_does_not_expose_api_key():
 
     assert secret not in str(api_error.details)
     assert "[REDACTED]" in str(api_error.details)
+
+def test_map_http_status_redacts_secret_from_activation_url():
+    secret = "SUPER_SECRET_ACTIVATION_TOKEN"
+    body = (
+        '{"error":{"message":"Requests to this API are blocked. '
+        'https://console.cloud.google.com/apis/api/test.googleapis.com/overview'
+        '?token=' + secret + '"}}'
+    )
+
+    api_error = map_http_status(403, body, service="Test Google API")
+
+    assert secret not in str(api_error.details)
