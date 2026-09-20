@@ -121,9 +121,12 @@ class IndexNowClient:
             body_text = exc.read().decode("utf-8", errors="replace")
             raise self._map_error(exc.code, body_text) from exc
         except urllib.error.URLError as exc:
+            reason = _redact_sensitive_text(str(exc.reason))
+            if self._key:
+                reason = reason.replace(self._key, "[REDACTED]")
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"IndexNow request failed: {exc.reason}",
+                f"IndexNow request failed: {reason}",
             ) from exc
 
     @staticmethod

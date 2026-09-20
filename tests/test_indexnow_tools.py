@@ -410,3 +410,22 @@ def test_preflight_generic_exception_does_not_expose_api_key():
     _, _, reason = result
     assert secret not in str(reason)
     assert "[REDACTED]" in str(reason)
+
+def test_indexnow_transport_error_does_not_expose_key(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_INDEXNOW_KEY"
+    client = IndexNowClient(secret)
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"transport failure for key={secret}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_request("GET", "https://api.indexnow.org/indexnow", None)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
