@@ -159,33 +159,68 @@ def test_fetch_rejects_redirect_to_private_ip(monkeypatch):
     assert calls == ["https://example.com/"]
 
 
+def test_transport_must_pin_validated_dns_address(monkeypatch):
+    """The transport must use the IP validated by the SSRF check."""
+    dns_calls = []
+    pinned_connections = []
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        dns_calls.append((host, port))
+        if len(dns_calls) == 1:
+            return [(2, 1, 6, "", ("93.184.216.34", port))]
+        return [(2, 1, 6, "", ("10.0.0.7", port))]
+
+    def fake_connect_pinned(ip, port, timeout):
+        pinned_connections.append((ip, port))
+        raise OSError("test connection stopped")
+
+    monkeypatch.setattr(
+        "seo_mcp.clients.http.socket.getaddrinfo",
+        fake_getaddrinfo,
+    )
+    monkeypatch.setattr(
+        "seo_mcp.clients.http._connect_pinned",
+        fake_connect_pinned,
+    )
+
+    client = HttpClient()
+
+    with pytest.raises(Exception):
+        client.fetch("http://rebind.example/")
+
+    assert len(dns_calls) == 1
+    assert pinned_connections == [("93.184.216.34", 80)]
+
 def test_http_client_sets_user_agent(monkeypatch):
     captured = {}
 
     class _Resp:
         status = 200
-        headers = {}
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
+        def getheaders(self):
+            return []
 
         def read(self, n=-1):
             return b"ok"
 
+    class _Connection:
+        def __init__(self, host, pinned_ip, port, *, timeout):
+            captured["host"] = host
+            captured["pinned_ip"] = pinned_ip
+            captured["port"] = port
+
+        def request(self, method, target, headers):
+            captured["user_agent"] = headers["User-Agent"]
+
+        def getresponse(self):
+            return _Resp()
+
         def close(self):
             pass
 
-    class _Opener:
-        def open(self, request, timeout):
-            captured["user_agent"] = request.get_header("User-agent")
-            return _Resp()
-
     monkeypatch.setattr(
-        "urllib.request.build_opener",
-        lambda *args, **kwargs: _Opener(),
+        "seo_mcp.clients.http._PinnedHTTPConnection",
+        _Connection,
     )
 
     c = HttpClient(user_agent="SEOMonster/test")
@@ -193,19 +228,31 @@ def test_http_client_sets_user_agent(monkeypatch):
 
     assert response.status == 200
     assert captured["user_agent"] == "SEOMonster/test"
+    assert captured["pinned_ip"] == "93.184.216.34"
 
 def test_transport_error_redacts_credentials_in_url(monkeypatch):
-    import urllib.error
-    import urllib.request
-
     secret = "SUPER_SECRET_HTTP_TOKEN"
     url = f"https://example.com/page?token={secret}"
     client = HttpClient()
 
-    def boom(*args, **kwargs):
-        raise urllib.error.URLError(f"connection failed for {url}")
+    class _Connection:
+        def __init__(self, host, pinned_ip, port, *, timeout):
+            pass
 
-    monkeypatch.setattr(urllib.request.OpenerDirector, "open", boom)
+        def request(self, *args, **kwargs):
+            raise OSError(f"connection failed for {url}")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "seo_mcp.clients.http._validate_public_url",
+        lambda url: ["93.184.216.34"],
+    )
+    monkeypatch.setattr(
+        "seo_mcp.clients.http._PinnedHTTPSConnection",
+        _Connection,
+    )
 
     with pytest.raises(ApiError) as exc_info:
         client._http_request_raw(
@@ -254,16 +301,28 @@ def test_max_redirects_error_redacts_credentials(monkeypatch):
     assert "[REDACTED]" in rendered
 
 def test_timeout_error_redacts_credentials_in_url(monkeypatch):
-    import urllib.request
-
     secret = "SUPER_SECRET_TIMEOUT_TOKEN"
     url = f"https://example.com/page?token={secret}"
     client = HttpClient()
 
-    def boom(*args, **kwargs):
-        raise TimeoutError("timed out")
+    class _Connection:
+        def __init__(self, host, pinned_ip, port, *, timeout):
+            pass
 
-    monkeypatch.setattr(urllib.request.OpenerDirector, "open", boom)
+        def request(self, *args, **kwargs):
+            raise TimeoutError("timed out")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "seo_mcp.clients.http._validate_public_url",
+        lambda url: ["93.184.216.34"],
+    )
+    monkeypatch.setattr(
+        "seo_mcp.clients.http._PinnedHTTPSConnection",
+        _Connection,
+    )
 
     with pytest.raises(ApiError) as exc_info:
         client._http_request_raw(
