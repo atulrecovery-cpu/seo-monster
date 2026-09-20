@@ -22,6 +22,8 @@ Design decisions:
 
 from __future__ import annotations
 
+import contextvars
+import http.client
 import ipaddress
 import socket
 import time
@@ -44,8 +46,12 @@ _DEFAULT_TIMEOUT = 20
 _DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_REDIRECTS = 10
 
+_PINNED_IP: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "seo_mcp_http_pinned_ip", default=None
+)
 
-def _validate_public_url(url: str) -> None:
+
+def _validate_public_url(url: str) -> list[str]:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ApiError(ErrorCode.INVALID_INPUT, "URL must use http:// or https:// and include a hostname.")
@@ -61,6 +67,8 @@ def _validate_public_url(url: str) -> None:
 
     if not addresses or any(not address.is_global for address in addresses):
         raise ApiError(ErrorCode.INVALID_INPUT, f"URL target {parsed.hostname!r} resolves to a non-public IP address.")
+
+    return [str(address) for address in addresses]
 
 
 @dataclass
@@ -101,6 +109,70 @@ class HttpResponse:
             return self.body_bytes.decode("utf-8", errors="replace")
 
 
+def _connect_pinned(
+    ip: str,
+    port: int,
+    timeout: float | None,
+) -> socket.socket:
+    """Connect directly to a previously validated numeric IP."""
+    address = ipaddress.ip_address(ip)
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        target = (ip, port, 0, 0) if address.version == 6 else (ip, port)
+        sock.connect(target)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(
+        self,
+        host: str,
+        pinned_ip: str,
+        port: int,
+        *,
+        timeout: float | None,
+    ) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        self.sock = _connect_pinned(
+            self._pinned_ip,
+            self.port,
+            self.timeout,
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self,
+        host: str,
+        pinned_ip: str,
+        port: int,
+        *,
+        timeout: float | None,
+    ) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        sock = _connect_pinned(
+            self._pinned_ip,
+            self.port,
+            self.timeout,
+        )
+        self.sock = self._context.wrap_socket(
+            sock,
+            server_hostname=self.host,
+        )
+
+
 class HttpClient:
     """Stdlib-only HTTP client with a thin testable seam."""
 
@@ -123,7 +195,7 @@ class HttpClient:
         chain: list[RedirectHop] = []
         current = url
         seen: set[str] = set()
-        _validate_public_url(current)
+        validated_ips = _validate_public_url(current)
         for _ in range(max_redirects + 1):
             if current in seen:
                 raise ApiError(
@@ -138,15 +210,19 @@ class HttpClient:
                 )
             seen.add(current)
             t0 = time.monotonic()
-            status, headers, body = self._http_request_raw(
-                method, current, max_bytes=max_bytes, extra_headers=extra_headers
-            )
+            pin_token = _PINNED_IP.set(validated_ips[0])
+            try:
+                status, headers, body = self._http_request_raw(
+                    method, current, max_bytes=max_bytes, extra_headers=extra_headers
+                )
+            finally:
+                _PINNED_IP.reset(pin_token)
             elapsed = int((time.monotonic() - t0) * 1000)
             if follow_redirects and 300 <= status < 400 and "location" in headers:
                 location = headers["location"]
                 resolved = urllib.parse.urljoin(current, location)
                 chain.append(RedirectHop(url=current, status=status, location=resolved, elapsed_ms=elapsed))
-                _validate_public_url(resolved)
+                validated_ips = _validate_public_url(resolved)
                 current = resolved
                 continue
             return HttpResponse(
@@ -175,49 +251,79 @@ class HttpClient:
         max_bytes: int,
         extra_headers: dict[str, str] | None,
     ) -> tuple[int, dict[str, str], bytes]:
-        """Perform one HTTP call without redirect following. Returns
-        ``(status, headers_lowercase_keys, body_bytes)``. This is the single
-        seam tests monkeypatch.
+        """Perform one request using the already validated destination IP."""
+        parsed = urllib.parse.urlsplit(url)
 
-        Status codes >= 400 still return normally here; the caller decides
-        whether a 404 is fatal (most tools) or expected (sitemap_health).
-        """
-        if not url.startswith(("http://", "https://")):
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ApiError(
                 ErrorCode.INVALID_INPUT,
                 f"URL must start with http:// or https://, got {url!r}.",
             )
-        request = urllib.request.Request(url, method=method)
-        request.add_header("User-Agent", self._user_agent)
-        request.add_header("Accept", "*/*")
+
+        pinned_ip = _PINNED_IP.get()
+        if pinned_ip is None:
+            pinned_ip = _validate_public_url(url)[0]
+
+        port = parsed.port or (
+            443 if parsed.scheme == "https" else 80
+        )
+
+        target = urllib.parse.urlunsplit(
+            ("", "", parsed.path or "/", parsed.query, "")
+        )
+
+        headers = {
+            "User-Agent": self._user_agent,
+            "Accept": "*/*",
+        }
         if extra_headers:
-            for k, v in extra_headers.items():
-                request.add_header(k, v)
-        # We need our own no-follow opener; the default opener handles 3xx.
-        opener = urllib.request.build_opener(_NoRedirectHandler())
+            headers.update(extra_headers)
+
+        connection_cls = (
+            _PinnedHTTPSConnection
+            if parsed.scheme == "https"
+            else _PinnedHTTPConnection
+        )
+
+        conn = connection_cls(
+            parsed.hostname,
+            pinned_ip,
+            port,
+            timeout=self._timeout,
+        )
+
         try:
-            with opener.open(request, timeout=self._timeout) as resp:
-                return self._read_response(resp, max_bytes)
-        except urllib.error.HTTPError as exc:
-            # 3xx without a Location, or any 4xx/5xx, lands here. We still
-            # want the headers + body so the caller can reason about them.
-            if 300 <= exc.code < 400:
-                # No location header; treat as terminal.
-                return self._read_response(exc, max_bytes)
-            return self._read_response(exc, max_bytes)
-        except urllib.error.URLError as exc:
-            safe_url = _redact_sensitive_text(url)
-            reason = _redact_sensitive_text(str(exc.reason))
-            raise ApiError(
-                ErrorCode.UPSTREAM_ERROR,
-                f"HTTP request to {safe_url!r} failed: {reason}",
-            ) from exc
+            conn.request(method, target, headers=headers)
+            resp = conn.getresponse()
+
+            response_headers = {
+                key.lower(): value
+                for key, value in resp.getheaders()
+            }
+
+            body = resp.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                body = body[:max_bytes]
+
+            return resp.status, response_headers, body
+
         except TimeoutError as exc:
             safe_url = _redact_sensitive_text(url)
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
                 f"HTTP request to {safe_url!r} timed out after {self._timeout}s.",
             ) from exc
+
+        except (OSError, http.client.HTTPException) as exc:
+            safe_url = _redact_sensitive_text(url)
+            reason = _redact_sensitive_text(str(exc))
+            raise ApiError(
+                ErrorCode.UPSTREAM_ERROR,
+                f"HTTP request to {safe_url!r} failed: {reason}",
+            ) from exc
+
+        finally:
+            conn.close()
 
     @staticmethod
     def _read_response(resp: Any, max_bytes: int) -> tuple[int, dict[str, str], bytes]:
