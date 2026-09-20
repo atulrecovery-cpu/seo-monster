@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from seo_mcp.clients.errors import map_http_status
+from seo_mcp.clients.errors import map_google_exception, map_http_status
 from seo_mcp.errors import DOCS_BASE, ErrorCode, err, ok
 
 
@@ -88,3 +88,31 @@ def test_generic_403_still_maps_to_auth_invalid_when_no_marker():
     body = '{"error":{"code":403,"message":"Forbidden"}}'
     api_error = map_http_status(403, body, service="PageSpeed Insights")
     assert api_error.code == ErrorCode.AUTH_INVALID
+def test_map_http_status_does_not_expose_api_key_from_upstream_body():
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+    body = f'{{"error":{{"message":"Request failed for key={secret}"}}}}'
+
+    api_error = map_http_status(403, body, service="CrUX History")
+
+    assert secret not in str(api_error.details)
+
+def test_map_google_exception_does_not_expose_api_key():
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+    exc = Exception(f"ACCESS_TOKEN_SCOPE_INSUFFICIENT request failed for key={secret}")
+
+    api_error = map_google_exception(exc)
+
+    assert secret not in str(api_error.details)
+    assert "[REDACTED]" in str(api_error.details)
+
+def test_map_http_status_redacts_secret_from_activation_url():
+    secret = "SUPER_SECRET_ACTIVATION_TOKEN"
+    body = (
+        '{"error":{"message":"Requests to this API are blocked. '
+        'https://console.cloud.google.com/apis/api/test.googleapis.com/overview'
+        '?token=' + secret + '"}}'
+    )
+
+    api_error = map_http_status(403, body, service="Test Google API")
+
+    assert secret not in str(api_error.details)

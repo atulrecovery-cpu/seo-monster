@@ -70,6 +70,12 @@ def test_resolve_config_path_precedence(tmp_path):
     assert str(resolve_config_path(env={})).endswith("/.config/seo-mcp/config.toml")
 
 
+
+def test_read_config_toml_rejects_oversized_file(tmp_path):
+    path = tmp_path / "oversized.toml"
+    path.write_text('[cloudflare]\napi_token = "filetoken"\n#' + ("x" * (1024 * 1024)))
+    assert read_config_toml(path) == {}
+
 def test_read_config_toml_missing_and_malformed(tmp_path):
     assert read_config_toml(tmp_path / "nope.toml") == {}
     bad = tmp_path / "bad.toml"
@@ -212,32 +218,22 @@ def test_validate_cloudflare_upstream_error_stays_unreachable(monkeypatch):
 
 
 def test_validate_indexnow_sends_branded_user_agent(monkeypatch):
-    # Regression for FEEDBACK §12c.ii: the default Python-urllib UA is 403'd by
-    # Cloudflare's Browser Integrity Check, so the key-file fetch must send the
-    # project's branded UA.
-    import urllib.request
+    # Regression for FEEDBACK §12c.ii: IndexNow key-file validation must
+    # continue using the project's branded User-Agent.
+    from seo_mcp.clients.http import HttpClient
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
-    class _Resp:
-        def __enter__(self):
-            return self
+    def fake_request(self, method, url, *, max_bytes, extra_headers):
+        captured["user_agent"] = self._user_agent
+        return 200, {"content-type": "text/plain; charset=utf-8"}, b"mykey"
 
-        def __exit__(self, *a):
-            return False
+    monkeypatch.setattr(HttpClient, "_http_request_raw", fake_request)
 
-        def read(self):
-            return b"mykey"
-
-    def fake_urlopen(req, timeout=None):
-        captured["ua"] = req.get_header("User-agent")
-        return _Resp()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     status, _ = cli.validate_indexnow("mykey", "https://example.com/mykey.txt")
-    assert status == "ok"
-    assert captured["ua"] and captured["ua"].startswith("SEOMonster/")
 
+    assert status == "ok"
+    assert str(captured["user_agent"]).startswith("SEOMonster/")
 
 def test_server_main_dispatches_setup_to_cli(monkeypatch):
     pytest.importorskip("mcp")
@@ -260,3 +256,71 @@ def test_server_main_dispatches_setup_to_cli(monkeypatch):
     with pytest.raises(SystemExit):
         server.main()
     assert exit_code["code"] == 5
+
+
+def test_validate_indexnow_rejects_loopback_before_request(monkeypatch):
+    import urllib.request
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("urlopen must not run for a loopback target")
+
+    monkeypatch.setattr(urllib.request, "urlopen", should_not_run)
+
+    status, message = cli.validate_indexnow(
+        "mykey",
+        "http://127.0.0.1/mykey.txt",
+    )
+
+    assert status == "rejected"
+    assert "unsafe key-file URL" in message
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
+def test_write_config_toml_rejects_existing_symlink(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("DO NOT OVERWRITE")
+
+    config_dir = tmp_path / "cfgdir"
+    config_dir.mkdir()
+    config_path = config_dir / "config.toml"
+    config_path.symlink_to(victim)
+
+    with pytest.raises(OSError):
+        write_config_toml(
+            config_path,
+            {"cloudflare": {"api_token": "secret"}},
+        )
+
+    assert victim.read_text() == "DO NOT OVERWRITE"
+
+def test_validate_cloudflare_generic_exception_redacts_api_key(monkeypatch):
+    from seo_mcp.clients.cloudflare import CfClient
+
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+
+    def boom(self):
+        raise RuntimeError(f"network failure for key={secret}")
+
+    monkeypatch.setattr(CfClient, "list_zones", boom)
+
+    status, message = cli.validate_cloudflare("cfat_real")
+
+    assert status == "unreachable"
+    assert secret not in message
+    assert "[REDACTED]" in message
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
+def test_write_config_toml_rejects_symlinked_parent_directory(tmp_path):
+    victim_dir = tmp_path / "victim_dir"
+    victim_dir.mkdir()
+
+    linked_dir = tmp_path / "cfgdir"
+    linked_dir.symlink_to(victim_dir, target_is_directory=True)
+
+    config_path = linked_dir / "config.toml"
+
+    with pytest.raises(OSError):
+        write_config_toml(
+            config_path,
+            {"cloudflare": {"api_token": "secret"}},
+        )
+
+    assert not (victim_dir / "config.toml").exists()

@@ -107,3 +107,172 @@ def test_body_text_decodes_with_declared_charset():
     c._http_request_raw = fake
     resp = c.fetch("https://example.com/")
     assert resp.body_text == "café"
+
+
+def test_fetch_rejects_loopback_ip_before_request():
+    c = HttpClient()
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("HTTP request must not run for a loopback target")
+
+    c._http_request_raw = should_not_run
+
+    with pytest.raises(ApiError) as ei:
+        c.fetch("http://127.0.0.1/admin")
+
+    assert ei.value.code == ErrorCode.INVALID_INPUT
+
+
+def test_fetch_rejects_hostname_resolving_to_private_ip(monkeypatch):
+    monkeypatch.setattr("seo_mcp.clients.http.socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("10.0.0.7", 0))])
+    c = HttpClient()
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("HTTP request must not run for a private DNS target")
+
+    c._http_request_raw = should_not_run
+
+    with pytest.raises(ApiError) as ei:
+        c.fetch("https://private.example/")
+
+    assert ei.value.code == ErrorCode.INVALID_INPUT
+
+def test_fetch_rejects_redirect_to_private_ip(monkeypatch):
+    monkeypatch.setattr(
+        "seo_mcp.clients.http.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
+
+    c = HttpClient()
+    calls = []
+
+    def fake_request(method, url, *, max_bytes, extra_headers):
+        calls.append(url)
+        return 302, {"location": "http://127.0.0.1/admin"}, b""
+
+    c._http_request_raw = fake_request
+
+    with pytest.raises(ApiError) as ei:
+        c.fetch("https://example.com/")
+
+    assert ei.value.code == ErrorCode.INVALID_INPUT
+    assert calls == ["https://example.com/"]
+
+
+def test_http_client_sets_user_agent(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n=-1):
+            return b"ok"
+
+        def close(self):
+            pass
+
+    class _Opener:
+        def open(self, request, timeout):
+            captured["user_agent"] = request.get_header("User-agent")
+            return _Resp()
+
+    monkeypatch.setattr(
+        "urllib.request.build_opener",
+        lambda *args, **kwargs: _Opener(),
+    )
+
+    c = HttpClient(user_agent="SEOMonster/test")
+    response = c.fetch("http://93.184.216.34/")
+
+    assert response.status == 200
+    assert captured["user_agent"] == "SEOMonster/test"
+
+def test_transport_error_redacts_credentials_in_url(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_HTTP_TOKEN"
+    url = f"https://example.com/page?token={secret}"
+    client = HttpClient()
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"connection failed for {url}")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_request_raw(
+            "GET",
+            url,
+            max_bytes=1024,
+            extra_headers=None,
+        )
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_redirect_loop_error_redacts_credentials(monkeypatch):
+    secret = "SUPER_SECRET_REDIRECT_TOKEN"
+    url = f"https://example.com/page?token={secret}"
+    client = HttpClient()
+
+    def fake_request(method, current, *, max_bytes, extra_headers):
+        return 302, {"location": url}, b""
+
+    monkeypatch.setattr(client, "_http_request_raw", fake_request)
+
+    with pytest.raises(ApiError) as exc_info:
+        client.fetch(url)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_max_redirects_error_redacts_credentials(monkeypatch):
+    secret = "SUPER_SECRET_MAX_REDIRECT_TOKEN"
+    url = f"https://example.com/start?token={secret}"
+    client = HttpClient()
+
+    def fake_request(method, current, *, max_bytes, extra_headers):
+        return 302, {"location": "/next"}, b""
+
+    monkeypatch.setattr(client, "_http_request_raw", fake_request)
+
+    with pytest.raises(ApiError) as exc_info:
+        client.fetch(url, max_redirects=0)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered
+
+def test_timeout_error_redacts_credentials_in_url(monkeypatch):
+    import urllib.request
+
+    secret = "SUPER_SECRET_TIMEOUT_TOKEN"
+    url = f"https://example.com/page?token={secret}"
+    client = HttpClient()
+
+    def boom(*args, **kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_request_raw(
+            "GET",
+            url,
+            max_bytes=1024,
+            extra_headers=None,
+        )
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

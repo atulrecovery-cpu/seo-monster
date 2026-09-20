@@ -102,14 +102,14 @@ def preflight_get(clients: Mapping[str, Any], url: str) -> tuple[int | None, str
         http = None
     if http is None:
         return None
-    from ..clients.errors import ApiError
+    from ..clients.errors import ApiError, _redact_sensitive_text
 
     try:
         resp = http.fetch(url, method="GET", follow_redirects=True, max_bytes=65536)
     except ApiError as exc:
         return None, "", exc.message
     except Exception as exc:  # pre-flight must never crash the actual write
-        return None, "", str(exc)
+        return None, "", _redact_sensitive_text(str(exc))
     return resp.status, resp.body_text, None
 
 

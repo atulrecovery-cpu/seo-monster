@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError, map_http_status
+from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 _TIMEOUT_SECONDS = 60
 
@@ -75,7 +75,14 @@ class AiEnginesClient:
         except urllib.error.HTTPError as exc:
             raise map_http_status(exc.code, exc.read().decode("utf-8", errors="replace"), service=service) from exc
         except urllib.error.URLError as exc:
-            raise ApiError(ErrorCode.UPSTREAM_ERROR, f"{service} request failed: {exc.reason}") from exc
+            reason = _redact_sensitive_text(str(exc.reason))
+            for secret in self._keys.values():
+                if secret:
+                    reason = reason.replace(secret, "[REDACTED]")
+            raise ApiError(
+                ErrorCode.UPSTREAM_ERROR,
+                f"{service} request failed: {reason}",
+            ) from exc
 
     # --- per-engine raw calls (the live seam; monkeypatched in tests) -----
     def _raw_perplexity(self, prompt: str) -> dict[str, Any]:

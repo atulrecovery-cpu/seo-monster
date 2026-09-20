@@ -82,7 +82,10 @@ def _granted_scopes(token_path: str) -> set[str]:
     fails toward re-consent rather than proceeding on an assumption.
     """
     try:
-        raw = json.loads(Path(token_path).read_text()).get("scopes")
+        path = Path(token_path)
+        if path.stat().st_size > 1024 * 1024:
+            return set()
+        raw = json.loads(path.read_text()).get("scopes")
     except (OSError, ValueError, AttributeError):
         return set()
     if isinstance(raw, str):
@@ -187,7 +190,14 @@ def _write_token(token_path: str, creds: Any) -> Path:
         os.chmod(path.parent, _TOKEN_DIR_MODE)
     except (OSError, NotImplementedError):
         pass
-    path.write_text(creds.to_json())
+    content = creds.to_json()
+    if os.name != "nt" and hasattr(os, "O_NOFOLLOW"):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        fd = os.open(path, flags, _TOKEN_FILE_MODE)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+    else:
+        path.write_text(content)
     try:
         os.chmod(path, _TOKEN_FILE_MODE)
     except (OSError, NotImplementedError):

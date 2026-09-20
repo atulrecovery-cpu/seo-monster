@@ -75,3 +75,24 @@ def test_builder(make_config):
     assert build_ai_engines_client(make_config()) is None
     c = build_ai_engines_client(make_config(ANTHROPIC_API_KEY="k"))
     assert isinstance(c, AiEnginesClient) and c.available_engines() == ["anthropic"]
+
+def test_gemini_transport_error_does_not_expose_api_key(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_GEMINI_KEY"
+    client = AiEnginesClient({"gemini": secret})
+
+    def boom(request, *args, **kwargs):
+        raise urllib.error.URLError(
+            f"connection failed for {request.full_url}"
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._raw_gemini("test prompt")
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

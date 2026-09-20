@@ -343,6 +343,16 @@ def test_map_error_table(status, expected_code):
     assert str(error.code) == expected_code
 
 
+
+def test_map_error_redacts_sensitive_upstream_body():
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+    body = f'{{"error":"request failed for key={secret}"}}'
+
+    error = IndexNowClient._map_error(403, body)
+
+    assert secret not in str(error.details)
+    assert "[REDACTED]" in str(error.details)
+
 def test_probe_returns_true_when_endpoint_responds():
     client = IndexNowClient(key="k")
     # Even a 400 means the endpoint is reachable; probe should return True.
@@ -358,3 +368,64 @@ def test_probe_returns_false_on_transport_error():
         ApiError(ErrorCode.UPSTREAM_ERROR, "network down")
     )
     assert client.probe() is False
+
+def test_submit_rejects_non_http_url(make_config):
+    client = _client_with_recorder()
+
+    result = indexnow_tools.indexnow_submit(
+        {"url": "ftp://example.com/file"},
+        make_config(),
+        {"indexnow": client},
+    )
+
+    assert result["error"]["code"] == "INVALID_INPUT"
+    assert client._calls == []
+
+
+def test_bulk_submit_rejects_non_http_url(make_config):
+    client = _client_with_recorder()
+
+    result = indexnow_tools.indexnow_bulk_submit(
+        {"urls": ["https://example.com/a", "ftp://example.com/b"]},
+        make_config(),
+        {"indexnow": client},
+    )
+
+    assert result["error"]["code"] == "INVALID_INPUT"
+    assert client._calls == []
+
+def test_preflight_generic_exception_does_not_expose_api_key():
+    class _FakeHttpSecretFailure:
+        def fetch(self, url: str, **_):
+            secret = "AIzaSySUPER_SECRET_TEST_KEY"
+            raise RuntimeError(f"transport failed for key={secret}")
+
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+    result = indexnow_tools.preflight_get(
+        {"http": _FakeHttpSecretFailure()},
+        "https://example.com/key.txt",
+    )
+
+    assert result is not None
+    _, _, reason = result
+    assert secret not in str(reason)
+    assert "[REDACTED]" in str(reason)
+
+def test_indexnow_transport_error_does_not_expose_key(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    secret = "SUPER_SECRET_INDEXNOW_KEY"
+    client = IndexNowClient(secret)
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError(f"transport failure for key={secret}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+    with pytest.raises(ApiError) as exc_info:
+        client._http_request("GET", "https://api.indexnow.org/indexnow", None)
+
+    rendered = str(exc_info.value)
+    assert secret not in rendered
+    assert "[REDACTED]" in rendered

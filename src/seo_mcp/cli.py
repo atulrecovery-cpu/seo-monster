@@ -21,6 +21,9 @@ from typing import Callable, Sequence
 
 from .auth import MissingGoogleAuth, required_scopes
 from .clients.google_auth import run_oauth_consent
+from .clients.errors import ApiError
+from .clients.http import HttpClient
+from .errors import ErrorCode
 from .config import (
     load_config,
     read_config_toml,
@@ -110,7 +113,7 @@ def validate_cloudflare(token: str) -> tuple[str, str]:
     status is 'ok' | 'rejected' | 'unreachable'. Module-level so tests can
     monkeypatch it without touching the network."""
     from .clients.cloudflare import CfClient
-    from .clients.errors import ApiError
+    from .clients.errors import ApiError, _redact_sensitive_text
     from .errors import ErrorCode
 
     try:
@@ -129,7 +132,7 @@ def validate_cloudflare(token: str) -> tuple[str, str]:
         }
         return ("rejected" if exc.code in rejected else "unreachable"), exc.message
     except Exception as exc:  # network boundary
-        return "unreachable", str(exc)
+        return "unreachable", _redact_sensitive_text(str(exc))
 
 
 def validate_indexnow(key: str, key_location: str | None) -> tuple[str, str]:
@@ -138,22 +141,21 @@ def validate_indexnow(key: str, key_location: str | None) -> tuple[str, str]:
     key file is per-host and the host may not be known at setup time."""
     if not key_location:
         return "skipped", "no key-file URL given; validated on first submit"
-    import urllib.error
-    import urllib.request
-
     from . import __version__
 
-    # Send the project's branded User-Agent. Cloudflare's Browser Integrity
-    # Check 403s the default Python-urllib UA (CF error 1010), which would make
-    # every IndexNow key file hosted behind CF look unreachable on first setup
-    # (tester FEEDBACK §12c.ii). Branded UAs are not blocked.
-    req = urllib.request.Request(
-        key_location,
-        headers={"User-Agent": f"SEOMonster/{__version__} (+https://seomonster.avansaber.com)"},
+    # Use the hardened HTTP client so the initial target and every redirect
+    # are validated before a network request is made.
+    client = HttpClient(
+        user_agent=f"SEOMonster/{__version__} (+https://seomonster.avansaber.com)",
+        timeout=15,
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 (trusted user URL)
-            body = resp.read().decode("utf-8", "replace").strip()
+        response = client.fetch(key_location, max_bytes=64 * 1024)
+        body = response.body_text.strip()
+    except ApiError as exc:
+        if exc.code == ErrorCode.INVALID_INPUT:
+            return "rejected", f"unsafe key-file URL: {exc}"
+        return "unreachable", f"could not fetch {key_location}: {exc}"
     except Exception as exc:  # network boundary
         return "unreachable", f"could not fetch {key_location}: {exc}"
     if body == key.strip():

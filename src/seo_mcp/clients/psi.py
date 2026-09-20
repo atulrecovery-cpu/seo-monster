@@ -18,7 +18,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError, map_http_status
+from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 
 _ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
@@ -52,9 +52,10 @@ class PsiClient:
             body = exc.read().decode("utf-8", errors="replace")
             raise map_http_status(exc.code, body, service="PageSpeed Insights") from exc
         except urllib.error.URLError as exc:
+            reason = _redact_sensitive_text(str(exc.reason))
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"PageSpeed Insights request failed: {exc.reason}",
+                f"PageSpeed Insights request failed: {reason}",
             ) from exc
 
     def analyze(

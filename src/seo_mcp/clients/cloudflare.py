@@ -20,13 +20,24 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError, map_http_status
+from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 
 API_BASE = "https://api.cloudflare.com/client/v4"
 _TIMEOUT_SECONDS = 20
 _DYNAMIC_REDIRECT_PHASE = "http_request_dynamic_redirect"
 _REDIRECT_PHASE_ACCOUNT = "http_request_redirect"
+
+
+def _redact_payload(value: Any) -> Any:
+    """Recursively redact credential-like strings while preserving payload shape."""
+    if isinstance(value, dict):
+        return {key: _redact_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_payload(item) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    return value
 
 
 class CfClient:
@@ -52,9 +63,10 @@ class CfClient:
             body_text = exc.read().decode("utf-8", errors="replace")
             raise self._error_from_http(exc.code, body_text) from exc
         except urllib.error.URLError as exc:
+            reason = _redact_sensitive_text(str(exc.reason))
             raise ApiError(
                 ErrorCode.UPSTREAM_ERROR,
-                f"Cloudflare request failed: {exc.reason}",
+                f"Cloudflare request failed: {reason}",
             ) from exc
 
     def _http_request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -88,7 +100,7 @@ class CfClient:
 
     @staticmethod
     def _error_from_payload(payload: dict[str, Any]) -> ApiError:
-        cf_errors = payload.get("errors", [])
+        cf_errors = _redact_payload(payload.get("errors", []))
         message = cf_errors[0].get("message") if cf_errors else "Cloudflare returned success=false."
         return ApiError(
             ErrorCode.UPSTREAM_ERROR,

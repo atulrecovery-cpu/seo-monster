@@ -29,6 +29,7 @@ _TRUTHY = {"true", "1", "yes", "on"}
 # the OAuth token cache. Mirrors clients/google_auth.py._write_token.
 _CONFIG_DIR_MODE = 0o700
 _CONFIG_FILE_MODE = 0o600
+_CONFIG_MAX_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,8 @@ def _load_file(config_path: str | None, env: Mapping[str, str]) -> tuple[dict[st
     if not path.is_file():
         return {}, None
     try:
+        if path.stat().st_size > _CONFIG_MAX_BYTES:
+            return {}, None
         with path.open("rb") as fh:
             return tomllib.load(fh), str(path)
     except (OSError, tomllib.TOMLDecodeError):
@@ -229,6 +232,8 @@ def read_config_toml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
+        if path.stat().st_size > _CONFIG_MAX_BYTES:
+            return {}
         with path.open("rb") as fh:
             return tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError):
@@ -280,13 +285,21 @@ def write_config_toml(path: Path, sections: Mapping[str, Mapping[str, Any]]) -> 
     content = "\n".join(lines).rstrip() + "\n"
 
     path = Path(path)
+    if os.name != "nt" and path.parent.is_symlink():
+        raise OSError(f"Refusing to write config through symlinked directory: {path.parent}")
     path.parent.mkdir(parents=True, exist_ok=True)
     # Best-effort chmod: silently skipped where POSIX modes don't apply (Windows).
     try:
         os.chmod(path.parent, _CONFIG_DIR_MODE)
     except (OSError, NotImplementedError):
         pass
-    path.write_text(content)
+    if os.name != "nt" and hasattr(os, "O_NOFOLLOW"):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        fd = os.open(path, flags, _CONFIG_FILE_MODE)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+    else:
+        path.write_text(content)
     try:
         os.chmod(path, _CONFIG_FILE_MODE)
     except (OSError, NotImplementedError):
