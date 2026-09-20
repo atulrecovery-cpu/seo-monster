@@ -185,6 +185,10 @@ def _write_token(token_path: str, creds: Any) -> Path:
     POSIX mode bits do not apply.
     """
     path = Path(token_path)
+    if os.name != "nt" and path.parent.is_symlink():
+        raise OSError(
+            f"Refusing to write OAuth token through symlinked directory: {path.parent}"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(path.parent, _TOKEN_DIR_MODE)
