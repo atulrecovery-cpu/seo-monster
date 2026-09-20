@@ -82,7 +82,10 @@ def _granted_scopes(token_path: str) -> set[str]:
     fails toward re-consent rather than proceeding on an assumption.
     """
     try:
-        raw = json.loads(Path(token_path).read_text()).get("scopes")
+        path = Path(token_path)
+        if path.stat().st_size > 1024 * 1024:
+            return set()
+        raw = json.loads(path.read_text()).get("scopes")
     except (OSError, ValueError, AttributeError):
         return set()
     if isinstance(raw, str):

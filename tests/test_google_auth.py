@@ -159,6 +159,16 @@ def test_scope_guard_handles_malformed_token_file(make_config, tmp_path):
         build_google_credentials(cfg, ["https://www.googleapis.com/auth/webmasters"])
 
 
+
+def test_scope_guard_rejects_oversized_token_file(make_config, tmp_path):
+    """An unexpectedly large OAuth token must fail safely toward re-consent."""
+    token = tmp_path / "token.json"
+    token.write_text('{"scopes": ["scope"], "padding": "' + ("x" * (1024 * 1024)) + '"}')
+    cfg = _oauth_config(make_config, token)
+
+    with pytest.raises(MissingGoogleAuth, match="does not cover the scopes"):
+        build_google_credentials(cfg, ["scope"])
+
 def test_scope_guard_runs_before_credential_construction(make_config, tmp_path):
     """Unparseable JSON must surface our remediation, not a json/AttributeError."""
     p = tmp_path / "token.json"
