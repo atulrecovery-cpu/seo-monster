@@ -212,32 +212,22 @@ def test_validate_cloudflare_upstream_error_stays_unreachable(monkeypatch):
 
 
 def test_validate_indexnow_sends_branded_user_agent(monkeypatch):
-    # Regression for FEEDBACK §12c.ii: the default Python-urllib UA is 403'd by
-    # Cloudflare's Browser Integrity Check, so the key-file fetch must send the
-    # project's branded UA.
-    import urllib.request
+    # Regression for FEEDBACK §12c.ii: IndexNow key-file validation must
+    # continue using the project's branded User-Agent.
+    from seo_mcp.clients.http import HttpClient
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
-    class _Resp:
-        def __enter__(self):
-            return self
+    def fake_request(self, method, url, *, max_bytes, extra_headers):
+        captured["user_agent"] = self._user_agent
+        return 200, {"content-type": "text/plain; charset=utf-8"}, b"mykey"
 
-        def __exit__(self, *a):
-            return False
+    monkeypatch.setattr(HttpClient, "_http_request_raw", fake_request)
 
-        def read(self):
-            return b"mykey"
-
-    def fake_urlopen(req, timeout=None):
-        captured["ua"] = req.get_header("User-agent")
-        return _Resp()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     status, _ = cli.validate_indexnow("mykey", "https://example.com/mykey.txt")
-    assert status == "ok"
-    assert captured["ua"] and captured["ua"].startswith("SEOMonster/")
 
+    assert status == "ok"
+    assert str(captured["user_agent"]).startswith("SEOMonster/")
 
 def test_server_main_dispatches_setup_to_cli(monkeypatch):
     pytest.importorskip("mcp")
@@ -260,3 +250,20 @@ def test_server_main_dispatches_setup_to_cli(monkeypatch):
     with pytest.raises(SystemExit):
         server.main()
     assert exit_code["code"] == 5
+
+
+def test_validate_indexnow_rejects_loopback_before_request(monkeypatch):
+    import urllib.request
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("urlopen must not run for a loopback target")
+
+    monkeypatch.setattr(urllib.request, "urlopen", should_not_run)
+
+    status, message = cli.validate_indexnow(
+        "mykey",
+        "http://127.0.0.1/mykey.txt",
+    )
+
+    assert status == "rejected"
+    assert "unsafe key-file URL" in message

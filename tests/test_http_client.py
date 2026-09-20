@@ -157,3 +157,39 @@ def test_fetch_rejects_redirect_to_private_ip(monkeypatch):
 
     assert ei.value.code == ErrorCode.INVALID_INPUT
     assert calls == ["https://example.com/"]
+
+
+def test_http_client_sets_user_agent(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n=-1):
+            return b"ok"
+
+        def close(self):
+            pass
+
+    class _Opener:
+        def open(self, request, timeout):
+            captured["user_agent"] = request.get_header("User-agent")
+            return _Resp()
+
+    monkeypatch.setattr(
+        "urllib.request.build_opener",
+        lambda *args, **kwargs: _Opener(),
+    )
+
+    c = HttpClient(user_agent="SEOMonster/test")
+    response = c.fetch("http://93.184.216.34/")
+
+    assert response.status == 200
+    assert captured["user_agent"] == "SEOMonster/test"
