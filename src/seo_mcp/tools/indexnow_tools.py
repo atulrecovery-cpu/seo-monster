@@ -6,6 +6,7 @@ not gated behind SEO_MCP_ALLOW_DESTRUCTIVE because the operation is additive
 
 from __future__ import annotations
 
+import urllib.parse
 from typing import Any, Mapping
 
 from ..clients.errors import ApiError
@@ -22,6 +23,17 @@ _REMEDIATION = (
     "https://www.indexnow.org/documentation."
 )
 _MAX_BULK = 10000
+
+def _is_http_url(url: object) -> bool:
+    """Return True only for absolute HTTP(S) URLs with a hostname."""
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+
 
 
 def _require(clients: Mapping[str, Any]):
@@ -104,6 +116,13 @@ def indexnow_submit(arguments, config, clients) -> dict[str, Any]:
     url = arguments.get("url")
     if not url:
         return err(ErrorCode.INVALID_INPUT, _SERVICE, "url is required.", docs_url=DOCS_BASE + "indexnow")
+    if not _is_http_url(url):
+        return err(
+            ErrorCode.INVALID_INPUT,
+            _SERVICE,
+            "url must be an absolute HTTP or HTTPS URL.",
+            docs_url=DOCS_BASE + "indexnow",
+        )
     if not arguments.get("skip_preflight"):
         verify_error = _verify_key_file(clients, config, _host_of(url))
         if verify_error:
@@ -154,6 +173,13 @@ def indexnow_bulk_submit(arguments, config, clients) -> dict[str, Any]:
             ErrorCode.INVALID_INPUT,
             _SERVICE,
             f"Too many URLs ({len(urls)}); max is {_MAX_BULK} per call.",
+            docs_url=DOCS_BASE + "indexnow",
+        )
+    if any(not _is_http_url(url) for url in urls):
+        return err(
+            ErrorCode.INVALID_INPUT,
+            _SERVICE,
+            "all urls must be absolute HTTP or HTTPS URLs.",
             docs_url=DOCS_BASE + "indexnow",
         )
     if not arguments.get("skip_preflight"):

@@ -358,3 +358,28 @@ def test_probe_returns_false_on_transport_error():
         ApiError(ErrorCode.UPSTREAM_ERROR, "network down")
     )
     assert client.probe() is False
+
+def test_submit_rejects_non_http_url(make_config):
+    client = _client_with_recorder()
+
+    result = indexnow_tools.indexnow_submit(
+        {"url": "ftp://example.com/file"},
+        make_config(),
+        {"indexnow": client},
+    )
+
+    assert result["error"]["code"] == "INVALID_INPUT"
+    assert client._calls == []
+
+
+def test_bulk_submit_rejects_non_http_url(make_config):
+    client = _client_with_recorder()
+
+    result = indexnow_tools.indexnow_bulk_submit(
+        {"urls": ["https://example.com/a", "ftp://example.com/b"]},
+        make_config(),
+        {"indexnow": client},
+    )
+
+    assert result["error"]["code"] == "INVALID_INPUT"
+    assert client._calls == []
