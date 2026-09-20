@@ -306,3 +306,21 @@ def test_validate_cloudflare_generic_exception_redacts_api_key(monkeypatch):
     assert status == "unreachable"
     assert secret not in message
     assert "[REDACTED]" in message
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
+def test_write_config_toml_rejects_symlinked_parent_directory(tmp_path):
+    victim_dir = tmp_path / "victim_dir"
+    victim_dir.mkdir()
+
+    linked_dir = tmp_path / "cfgdir"
+    linked_dir.symlink_to(victim_dir, target_is_directory=True)
+
+    config_path = linked_dir / "config.toml"
+
+    with pytest.raises(OSError):
+        write_config_toml(
+            config_path,
+            {"cloudflare": {"api_token": "secret"}},
+        )
+
+    assert not (victim_dir / "config.toml").exists()

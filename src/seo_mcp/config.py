@@ -285,6 +285,8 @@ def write_config_toml(path: Path, sections: Mapping[str, Mapping[str, Any]]) -> 
     content = "\n".join(lines).rstrip() + "\n"
 
     path = Path(path)
+    if os.name != "nt" and path.parent.is_symlink():
+        raise OSError(f"Refusing to write config through symlinked directory: {path.parent}")
     path.parent.mkdir(parents=True, exist_ok=True)
     # Best-effort chmod: silently skipped where POSIX modes don't apply (Windows).
     try:
