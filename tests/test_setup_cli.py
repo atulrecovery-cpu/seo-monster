@@ -267,3 +267,20 @@ def test_validate_indexnow_rejects_loopback_before_request(monkeypatch):
 
     assert status == "rejected"
     assert "unsafe key-file URL" in message
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
+def test_write_config_toml_rejects_existing_symlink(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("DO NOT OVERWRITE")
+
+    config_dir = tmp_path / "cfgdir"
+    config_dir.mkdir()
+    config_path = config_dir / "config.toml"
+    config_path.symlink_to(victim)
+
+    with pytest.raises(OSError):
+        write_config_toml(
+            config_path,
+            {"cloudflare": {"api_token": "secret"}},
+        )
+
+    assert victim.read_text() == "DO NOT OVERWRITE"

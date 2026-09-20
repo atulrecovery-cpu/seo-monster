@@ -286,7 +286,13 @@ def write_config_toml(path: Path, sections: Mapping[str, Mapping[str, Any]]) -> 
         os.chmod(path.parent, _CONFIG_DIR_MODE)
     except (OSError, NotImplementedError):
         pass
-    path.write_text(content)
+    if os.name != "nt" and hasattr(os, "O_NOFOLLOW"):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        fd = os.open(path, flags, _CONFIG_FILE_MODE)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+    else:
+        path.write_text(content)
     try:
         os.chmod(path, _CONFIG_FILE_MODE)
     except (OSError, NotImplementedError):

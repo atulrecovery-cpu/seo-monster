@@ -166,3 +166,21 @@ def test_scope_guard_runs_before_credential_construction(make_config, tmp_path):
     cfg = _oauth_config(make_config, p)
     with pytest.raises(MissingGoogleAuth, match="seo-monster auth"):
         build_google_credentials(cfg, ["https://www.googleapis.com/auth/webmasters"])
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics are platform-specific")
+def test_write_token_rejects_existing_symlink(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("DO NOT OVERWRITE")
+
+    token_dir = tmp_path / "tokens"
+    token_dir.mkdir()
+    token_path = token_dir / "token.json"
+    token_path.symlink_to(victim)
+
+    fake_creds = SimpleNamespace(
+        to_json=lambda: '{"refresh_token": "secret"}'
+    )
+
+    with pytest.raises(OSError):
+        _write_token(str(token_path), fake_creds)
+
+    assert victim.read_text() == "DO NOT OVERWRITE"

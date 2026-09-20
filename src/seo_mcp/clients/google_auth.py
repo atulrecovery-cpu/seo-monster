@@ -187,7 +187,14 @@ def _write_token(token_path: str, creds: Any) -> Path:
         os.chmod(path.parent, _TOKEN_DIR_MODE)
     except (OSError, NotImplementedError):
         pass
-    path.write_text(creds.to_json())
+    content = creds.to_json()
+    if os.name != "nt" and hasattr(os, "O_NOFOLLOW"):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        fd = os.open(path, flags, _TOKEN_FILE_MODE)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+    else:
+        path.write_text(content)
     try:
         os.chmod(path, _TOKEN_FILE_MODE)
     except (OSError, NotImplementedError):
