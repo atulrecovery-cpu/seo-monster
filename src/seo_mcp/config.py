@@ -29,6 +29,7 @@ _TRUTHY = {"true", "1", "yes", "on"}
 # the OAuth token cache. Mirrors clients/google_auth.py._write_token.
 _CONFIG_DIR_MODE = 0o700
 _CONFIG_FILE_MODE = 0o600
+_CONFIG_MAX_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,8 @@ def _load_file(config_path: str | None, env: Mapping[str, str]) -> tuple[dict[st
     if not path.is_file():
         return {}, None
     try:
+        if path.stat().st_size > _CONFIG_MAX_BYTES:
+            return {}, None
         with path.open("rb") as fh:
             return tomllib.load(fh), str(path)
     except (OSError, tomllib.TOMLDecodeError):
@@ -229,6 +232,8 @@ def read_config_toml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
+        if path.stat().st_size > _CONFIG_MAX_BYTES:
+            return {}
         with path.open("rb") as fh:
             return tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError):

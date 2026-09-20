@@ -70,6 +70,12 @@ def test_resolve_config_path_precedence(tmp_path):
     assert str(resolve_config_path(env={})).endswith("/.config/seo-mcp/config.toml")
 
 
+
+def test_read_config_toml_rejects_oversized_file(tmp_path):
+    path = tmp_path / "oversized.toml"
+    path.write_text('[cloudflare]\napi_token = "filetoken"\n#' + ("x" * (1024 * 1024)))
+    assert read_config_toml(path) == {}
+
 def test_read_config_toml_missing_and_malformed(tmp_path):
     assert read_config_toml(tmp_path / "nope.toml") == {}
     bad = tmp_path / "bad.toml"

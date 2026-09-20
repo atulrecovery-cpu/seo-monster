@@ -179,6 +179,14 @@ def test_path_fields_pass_through_when_already_absolute():
     assert cfg.google.token == "/abs/token.json"
 
 
+
+def test_oversized_toml_falls_back_to_env(tmp_path):
+    path = tmp_path / "oversized.toml"
+    path.write_text('[cloudflare]\napi_token = "filetoken"\n#' + ("x" * (1024 * 1024)))
+    cfg = load_config(env={"CF_API_TOKEN": "envtoken"}, config_path=str(path))
+    assert cfg.cf_api_token == "envtoken"
+    assert cfg.source_path is None
+
 def test_malformed_toml_falls_back_to_env(tmp_path):
     path = tmp_path / "bad.toml"
     path.write_text("this is = = not valid toml [[[")
