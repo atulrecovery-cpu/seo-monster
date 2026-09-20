@@ -38,7 +38,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
-from .errors import ApiError
+from .errors import ApiError, _redact_sensitive_text
 
 
 _ENDPOINT = "https://api.indexnow.org/indexnow"
@@ -132,7 +132,7 @@ class IndexNowClient:
             return ApiError(
                 ErrorCode.INVALID_INPUT,
                 "IndexNow rejected the request as malformed (HTTP 400).",
-                details={"status": 400, "body": body[:500]},
+                details={"status": 400, "body": _redact_sensitive_text(body)[:500]},
             )
         if status == 403:
             return ApiError(
@@ -143,25 +143,25 @@ class IndexNowClient:
                     "the key string as the file body, then retry. Or pass an "
                     "explicit keyLocation when submitting."
                 ),
-                details={"status": 403, "body": body[:500]},
+                details={"status": 403, "body": _redact_sensitive_text(body)[:500]},
             )
         if status == 422:
             return ApiError(
                 ErrorCode.INVALID_INPUT,
                 "IndexNow says the URL list contains URLs that do not match the host.",
-                details={"status": 422, "body": body[:500]},
+                details={"status": 422, "body": _redact_sensitive_text(body)[:500]},
             )
         if status == 429:
             return ApiError(
                 ErrorCode.RATE_LIMITED,
                 "IndexNow rate limit hit (HTTP 429).",
                 remediation="Wait before submitting again; the spec rate-limits per host.",
-                details={"status": 429, "body": body[:500]},
+                details={"status": 429, "body": _redact_sensitive_text(body)[:500]},
             )
         return ApiError(
             ErrorCode.UPSTREAM_ERROR,
             f"IndexNow returned HTTP {status}.",
-            details={"status": status, "body": body[:500]},
+            details={"status": status, "body": _redact_sensitive_text(body)[:500]},
         )
 
     def probe(self) -> bool:

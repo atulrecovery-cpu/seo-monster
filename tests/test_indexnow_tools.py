@@ -343,6 +343,16 @@ def test_map_error_table(status, expected_code):
     assert str(error.code) == expected_code
 
 
+
+def test_map_error_redacts_sensitive_upstream_body():
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+    body = f'{{"error":"request failed for key={secret}"}}'
+
+    error = IndexNowClient._map_error(403, body)
+
+    assert secret not in str(error.details)
+    assert "[REDACTED]" in str(error.details)
+
 def test_probe_returns_true_when_endpoint_responds():
     client = IndexNowClient(key="k")
     # Even a 400 means the endpoint is reachable; probe should return True.
