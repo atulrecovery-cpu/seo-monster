@@ -393,3 +393,20 @@ def test_bulk_submit_rejects_non_http_url(make_config):
 
     assert result["error"]["code"] == "INVALID_INPUT"
     assert client._calls == []
+
+def test_preflight_generic_exception_does_not_expose_api_key():
+    class _FakeHttpSecretFailure:
+        def fetch(self, url: str, **_):
+            secret = "AIzaSySUPER_SECRET_TEST_KEY"
+            raise RuntimeError(f"transport failed for key={secret}")
+
+    secret = "AIzaSySUPER_SECRET_TEST_KEY"
+    result = indexnow_tools.preflight_get(
+        {"http": _FakeHttpSecretFailure()},
+        "https://example.com/key.txt",
+    )
+
+    assert result is not None
+    _, _, reason = result
+    assert secret not in str(reason)
+    assert "[REDACTED]" in str(reason)
