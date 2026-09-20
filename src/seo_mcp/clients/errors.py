@@ -80,7 +80,7 @@ def map_google_exception(exc: Exception) -> ApiError:
     Checks the textual markers the reference gsc.py relies on (scope-insufficient
     and service-disabled) before falling back to HTTP status mapping.
     """
-    text = str(exc)
+    text = _redact_sensitive_text(str(exc))
     status = _status_of(exc)
 
     if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in text or "insufficient authentication scopes" in text:
