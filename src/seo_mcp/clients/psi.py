@@ -18,6 +18,7 @@ from typing import Any
 
 from ..config import Config
 from ..errors import ErrorCode
+from ._response import read_json_response, read_limited_text
 from .errors import ApiError, _redact_sensitive_text, map_http_status
 
 
@@ -47,9 +48,9 @@ class PsiClient:
         This is the single network seam tests monkeypatch."""
         try:
             with urllib.request.urlopen(url, timeout=_TIMEOUT_SECONDS) as resp:
-                return json.loads(resp.read())
+                return read_json_response(resp, service="PageSpeed Insights")
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
+            body = read_limited_text(exc, service="PageSpeed Insights")
             raise map_http_status(exc.code, body, service="PageSpeed Insights") from exc
         except urllib.error.URLError as exc:
             reason = _redact_sensitive_text(str(exc.reason))
